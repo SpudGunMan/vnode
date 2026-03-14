@@ -1,14 +1,16 @@
 import unittest
 import json
+import sqlite3
 import tempfile
 import time
 from pathlib import Path
 
 from meshtastic import BROADCAST_NUM
 from examples.autoresponder import DirectMessageAutoResponder
+from meshdb import handle_packet, normalize_packet
 from pubsub import pub
 from meshtastic.protobuf import mesh_pb2, portnums_pb2
-from mudp import UDPPacketStream
+from mudp import UDPPacketStream, build_mesh_packet
 from mudp import send_text_message as mudp_send_text_message
 from mudp.encryption import decrypt_packet as decrypt_channel_packet
 from mudp.reliability import NUM_RELIABLE_RETX, pending_acks
@@ -542,6 +544,304 @@ class PkiCryptoTest(unittest.TestCase):
 
         self.assertFalse(stream._is_duplicate_packet(inbound))
         self.assertTrue(stream._is_duplicate_packet(inbound))
+
+    def test_build_mesh_packet_supports_meshpacket_envelope_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _public_key, private_key = generate_keypair()
+            config_path = self._write_temp_config(root, b64_encode(private_key))
+            VirtualNode(config_path)
+
+            data = mesh_pb2.Data()
+            data.portnum = portnums_pb2.PortNum.TEXT_MESSAGE_APP
+            data.payload = b"hello"
+
+            packet = build_mesh_packet(
+                data,
+                to=int("12345678", 16),
+                want_ack=True,
+                priority="HIGH",
+                delayed="DELAYED_DIRECT",
+                via_mqtt=True,
+                next_hop=0x44,
+                relay_node=0x55,
+                tx_after=123456,
+                public_key=b"\x01\x02\x03",
+                pki_encrypted=True,
+                transport_mechanism="TRANSPORT_API",
+                rx_time=111,
+                rx_snr=4.5,
+                rx_rssi=-70,
+            )
+
+            self.assertTrue(packet.want_ack)
+            self.assertEqual(packet.priority, mesh_pb2.MeshPacket.Priority.HIGH)
+            self.assertEqual(packet.delayed, mesh_pb2.MeshPacket.Delayed.DELAYED_DIRECT)
+            self.assertTrue(packet.via_mqtt)
+            self.assertEqual(packet.next_hop, 0x44)
+            self.assertEqual(packet.relay_node, 0x55)
+            self.assertEqual(packet.tx_after, 123456)
+            self.assertEqual(bytes(packet.public_key), b"\x01\x02\x03")
+            self.assertTrue(packet.pki_encrypted)
+            self.assertEqual(
+                packet.transport_mechanism,
+                mesh_pb2.MeshPacket.TransportMechanism.TRANSPORT_API,
+            )
+            self.assertEqual(packet.rx_time, 111)
+            self.assertEqual(packet.rx_snr, 4.5)
+            self.assertEqual(packet.rx_rssi, -70)
+
+    def test_normalize_packet_preserves_meshpacket_envelope_fields(self) -> None:
+        packet = mesh_pb2.MeshPacket()
+        packet.id = 8080
+        setattr(packet, "from", int("89abcdef", 16))
+        packet.to = int("12345678", 16)
+        packet.channel = 7
+        packet.rx_time = 222
+        packet.rx_snr = 3.25
+        packet.hop_limit = 3
+        packet.want_ack = True
+        packet.priority = mesh_pb2.MeshPacket.Priority.ACK
+        packet.rx_rssi = -90
+        packet.via_mqtt = True
+        packet.hop_start = 5
+        packet.public_key = b"\x0a\x0b\x0c"
+        packet.pki_encrypted = True
+        packet.next_hop = 0x11
+        packet.relay_node = 0x22
+        packet.tx_after = 333
+        packet.transport_mechanism = mesh_pb2.MeshPacket.TransportMechanism.TRANSPORT_MULTICAST_UDP
+        packet.decoded.portnum = portnums_pb2.PortNum.TEXT_MESSAGE_APP
+        packet.decoded.payload = b"hello"
+
+        normalized = normalize_packet(packet, "udp")
+
+        self.assertEqual(normalized["from"], int("89abcdef", 16))
+        self.assertEqual(normalized["to"], int("12345678", 16))
+        self.assertEqual(normalized["id"], 8080)
+        self.assertEqual(normalized["channel"], 7)
+        self.assertEqual(normalized["rxTime"], 222)
+        self.assertEqual(normalized["snr"], 3.25)
+        self.assertEqual(normalized["hopLimit"], 3)
+        self.assertTrue(normalized["wantAck"])
+        self.assertEqual(normalized["priority"], "ACK")
+        self.assertEqual(normalized["rxRssi"], -90)
+        self.assertTrue(normalized["viaMqtt"])
+        self.assertEqual(normalized["hopStart"], 5)
+        self.assertEqual(normalized["publicKey"], "CgsM")
+        self.assertTrue(normalized["pkiEncrypted"])
+        self.assertEqual(normalized["nextHop"], 0x11)
+        self.assertEqual(normalized["relayNode"], 0x22)
+        self.assertEqual(normalized["txAfter"], 333)
+        self.assertEqual(normalized["transportMechanism"], "TRANSPORT_MULTICAST_UDP")
+        self.assertEqual(normalized["decoded"]["text"], "hello")
+
+    def test_handle_packet_persists_message_packet_meta_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_root = root / "meshdb"
+            db_root.mkdir()
+            owner = int("89abcdef", 16)
+
+            packet = mesh_pb2.MeshPacket()
+            packet.id = 9002
+            setattr(packet, "from", int("12345678", 16))
+            packet.to = owner
+            packet.channel = 7
+            packet.rx_time = 444
+            packet.rx_snr = 4.25
+            packet.rx_rssi = -72
+            packet.hop_limit = 3
+            packet.want_ack = True
+            packet.priority = mesh_pb2.MeshPacket.Priority.HIGH
+            packet.delayed = mesh_pb2.MeshPacket.Delayed.DELAYED_DIRECT
+            packet.via_mqtt = True
+            packet.hop_start = 5
+            packet.public_key = b"\x01\x02\x03"
+            packet.pki_encrypted = True
+            packet.next_hop = 0x11
+            packet.relay_node = 0x22
+            packet.tx_after = 555
+            packet.transport_mechanism = mesh_pb2.MeshPacket.TransportMechanism.TRANSPORT_MULTICAST_UDP
+            packet.decoded.portnum = portnums_pb2.PortNum.TEXT_MESSAGE_APP
+            packet.decoded.payload = b"saved to db"
+
+            stored = handle_packet(normalize_packet(packet, "udp"), node_database_number=owner, db_path=str(db_root))
+            self.assertTrue(stored["message"])
+
+            with sqlite3.connect(db_root / f"{owner}.db") as con:
+                row = con.execute(
+                    f'SELECT message_text, timestamp, to_node, packet_id, channel, rx_snr, rx_rssi, hop_limit, '
+                    f'want_ack, priority, delayed, via_mqtt, hop_start, public_key, pki_encrypted, '
+                    f'next_hop, relay_node, tx_after, transport_mechanism '
+                    f'FROM "{owner}_7_messages" WHERE node_num = ?',
+                    (str(int("12345678", 16)),),
+                ).fetchone()
+
+            self.assertEqual(
+                row,
+                (
+                    "saved to db",
+                    444,
+                    owner,
+                    9002,
+                    7,
+                    4.25,
+                    -72,
+                    3,
+                    1,
+                    "HIGH",
+                    "DELAYED_DIRECT",
+                    1,
+                    5,
+                    "AQID",
+                    1,
+                    0x11,
+                    0x22,
+                    555,
+                    "TRANSPORT_MULTICAST_UDP",
+                ),
+            )
+
+    def test_handle_packet_persists_location_packet_meta_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_root = root / "meshdb"
+            db_root.mkdir()
+            owner = int("89abcdef", 16)
+
+            position = mesh_pb2.Position()
+            position.latitude_i = int(45.523064 * 1e7)
+            position.longitude_i = int(-122.676483 * 1e7)
+            position.altitude = 27
+
+            packet = mesh_pb2.MeshPacket()
+            packet.id = 9003
+            setattr(packet, "from", int("12345678", 16))
+            packet.to = BROADCAST_NUM
+            packet.channel = 1
+            packet.rx_time = 555
+            packet.rx_snr = 2.5
+            packet.rx_rssi = -85
+            packet.hop_limit = 2
+            packet.want_ack = False
+            packet.priority = mesh_pb2.MeshPacket.Priority.BACKGROUND
+            packet.via_mqtt = False
+            packet.hop_start = 2
+            packet.next_hop = 0x44
+            packet.relay_node = 0x55
+            packet.tx_after = 777
+            packet.transport_mechanism = mesh_pb2.MeshPacket.TransportMechanism.TRANSPORT_MULTICAST_UDP
+            packet.decoded.portnum = portnums_pb2.PortNum.POSITION_APP
+            packet.decoded.payload = position.SerializeToString()
+
+            stored = handle_packet(normalize_packet(packet, "udp"), node_database_number=owner, db_path=str(db_root))
+            self.assertTrue(stored["position"])
+
+            with sqlite3.connect(db_root / f"{owner}.db") as con:
+                row = con.execute(
+                    f'SELECT latitude_i, longitude_i, altitude, timestamp, packet_id, rx_snr, rx_rssi, '
+                    f'priority, hop_start, next_hop, relay_node, tx_after, transport_mechanism '
+                    f'FROM "{owner}_location" WHERE node_num = ?',
+                    (str(int("12345678", 16)),),
+                ).fetchone()
+
+            self.assertEqual(
+                row,
+                (
+                    int(45.523064 * 1e7),
+                    int(-122.676483 * 1e7),
+                    27.0,
+                    555,
+                    9003,
+                    2.5,
+                    -85,
+                    "BACKGROUND",
+                    2,
+                    0x44,
+                    0x55,
+                    777,
+                    "TRANSPORT_MULTICAST_UDP",
+                ),
+            )
+
+    def test_handle_packet_persists_telemetry_packet_meta_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_root = root / "meshdb"
+            db_root.mkdir()
+            owner = int("89abcdef", 16)
+
+            packet = {
+                "from": int("12345678", 16),
+                "to": owner,
+                "id": 9004,
+                "channel": 3,
+                "rxTime": 666,
+                "snr": 1.75,
+                "rxRssi": -67,
+                "hopLimit": 4,
+                "wantAck": True,
+                "priority": "HIGH",
+                "delayed": "DELAYED_DIRECT",
+                "viaMqtt": True,
+                "hopStart": 4,
+                "publicKey": "AQID",
+                "pkiEncrypted": True,
+                "nextHop": 0x66,
+                "relayNode": 0x77,
+                "txAfter": 888,
+                "transportMechanism": "TRANSPORT_MULTICAST_UDP",
+                "decoded": {
+                    "portnum": "TELEMETRY_APP",
+                    "telemetry": {
+                        "deviceMetrics": {
+                            "batteryLevel": 91,
+                            "voltage": 4.11,
+                            "channelUtilization": 12.5,
+                            "airUtilTx": 2.25,
+                            "uptimeSeconds": 12345,
+                        }
+                    },
+                },
+            }
+
+            stored = handle_packet(packet, node_database_number=owner, db_path=str(db_root))
+            self.assertTrue(stored["telemetry"])
+
+            with sqlite3.connect(db_root / f"{owner}.db") as con:
+                row = con.execute(
+                    f'SELECT battery_level, voltage, channel_utilization, air_util_tx, uptime_seconds, timestamp, '
+                    f'packet_id, rx_snr, rx_rssi, want_ack, priority, delayed, via_mqtt, public_key, '
+                    f'pki_encrypted, next_hop, relay_node, tx_after, transport_mechanism '
+                    f'FROM "{owner}_telemetry_device" WHERE node_num = ?',
+                    (str(int("12345678", 16)),),
+                ).fetchone()
+
+            self.assertEqual(
+                row,
+                (
+                    91.0,
+                    4.11,
+                    12.5,
+                    2.25,
+                    12345,
+                    666,
+                    9004,
+                    1.75,
+                    -67,
+                    1,
+                    "HIGH",
+                    "DELAYED_DIRECT",
+                    1,
+                    "AQID",
+                    1,
+                    0x66,
+                    0x77,
+                    888,
+                    "TRANSPORT_MULTICAST_UDP",
+                ),
+            )
 
 
 if __name__ == "__main__":
