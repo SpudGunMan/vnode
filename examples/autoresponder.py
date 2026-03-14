@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ class DirectMessageAutoResponder:
     def __init__(self, node: VirtualNode) -> None:
         self.node = node
         self.reply_with_emoji = True
+        self.min_reply_delay_seconds = 0.8
+        self.max_reply_delay_seconds = 1.8
 
     def on_packet(self, packet: mesh_pb2.MeshPacket, addr=None) -> None:
         del addr
@@ -38,6 +41,13 @@ class DirectMessageAutoResponder:
         if message is None:
             return
         print(f"\n[RECV] From: !{int(sender_id):08x} Message: {message}")
+
+        delay_seconds = random.uniform(
+            self.min_reply_delay_seconds,
+            self.max_reply_delay_seconds,
+        )
+        print(f"[WAIT] Sleeping {delay_seconds:.2f}s before replying")
+        time.sleep(delay_seconds)
 
         if self.reply_with_emoji:
             reply_message = "👍"

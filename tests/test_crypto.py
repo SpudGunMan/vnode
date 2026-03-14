@@ -7,7 +7,7 @@ from pathlib import Path
 
 from meshtastic import BROADCAST_NUM
 from examples.autoresponder import DirectMessageAutoResponder
-from meshdb import handle_packet, normalize_packet
+from meshdb import NodeDB, handle_packet, normalize_packet
 from pubsub import pub
 from meshtastic.protobuf import mesh_pb2, portnums_pb2
 from mudp import UDPPacketStream, build_mesh_packet
@@ -301,6 +301,107 @@ class PkiCryptoTest(unittest.TestCase):
             self.assertIsNotNone(pending)
             self.assertEqual(pending.destination, int("12345678", 16))
             self.assertGreater(pending.next_retry_monotonic, time.monotonic())
+
+    def test_outgoing_channel_text_message_is_saved_to_meshdb(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _public_key, private_key = generate_keypair()
+            config_path = self._write_temp_config(root, b64_encode(private_key))
+            node = VirtualNode(config_path)
+
+            sent: list[bytes] = []
+            original_sendto = conn.sendto
+            original_host = conn.host
+            original_port = conn.port
+            try:
+                node.connect_send_socket = lambda: None
+                conn.host = "224.0.0.69"
+                conn.port = 4403
+                conn.sendto = lambda data, addr: sent.append(data)
+                packet_id = node.send_text("!12345678", "store outbound")
+            finally:
+                conn.sendto = original_sendto
+                conn.host = original_host
+                conn.port = original_port
+
+            self.assertEqual(len(sent), 1)
+            packet = mesh_pb2.MeshPacket()
+            packet.ParseFromString(sent[0])
+            self.assertEqual(packet.id, packet_id)
+
+            with sqlite3.connect(Path(node.meshdb_path) / f"{node.node_num}.db") as con:
+                row = con.execute(
+                    f'SELECT node_num, message_text, packet_id, to_node, channel, want_ack, pki_encrypted '
+                    f'FROM "{node.node_num}_{packet.channel}_messages" WHERE packet_id = ?',
+                    (packet_id,),
+                ).fetchone()
+
+            self.assertEqual(
+                row,
+                (
+                    str(node.node_num),
+                    "store outbound",
+                    packet_id,
+                    int("12345678", 16),
+                    packet.channel,
+                    1,
+                    0,
+                ),
+            )
+
+    def test_outgoing_pki_text_message_is_saved_to_meshdb(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _public_key, private_key = generate_keypair()
+            peer_public_key, _peer_private_key = generate_keypair()
+            config_path = self._write_temp_config(root, b64_encode(private_key))
+            node = VirtualNode(config_path)
+            NodeDB(node.node_num, node.meshdb_path).upsert(
+                node_num=int("12345678", 16),
+                public_key=b64_encode(peer_public_key),
+            )
+
+            sent: list[bytes] = []
+            original_sendto = conn.sendto
+            original_host = conn.host
+            original_port = conn.port
+            try:
+                node.connect_send_socket = lambda: None
+                conn.host = "224.0.0.69"
+                conn.port = 4403
+                conn.sendto = lambda data, addr: sent.append(data)
+                packet_id = node.send_text("!12345678", "store outbound pki", pki_mode="on")
+            finally:
+                conn.sendto = original_sendto
+                conn.host = original_host
+                conn.port = original_port
+
+            self.assertEqual(len(sent), 1)
+            packet = mesh_pb2.MeshPacket()
+            packet.ParseFromString(sent[0])
+            self.assertEqual(packet.id, packet_id)
+            self.assertTrue(packet.pki_encrypted)
+            self.assertEqual(packet.channel, 0)
+
+            with sqlite3.connect(Path(node.meshdb_path) / f"{node.node_num}.db") as con:
+                row = con.execute(
+                    f'SELECT node_num, message_text, packet_id, to_node, channel, want_ack, pki_encrypted '
+                    f'FROM "{node.node_num}_0_messages" WHERE packet_id = ?',
+                    (packet_id,),
+                ).fetchone()
+
+            self.assertEqual(
+                row,
+                (
+                    str(node.node_num),
+                    "store outbound pki",
+                    packet_id,
+                    int("12345678", 16),
+                    0,
+                    1,
+                    1,
+                ),
+            )
 
     def test_incoming_want_ack_text_message_triggers_routing_ack(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

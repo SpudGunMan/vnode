@@ -367,6 +367,7 @@ class VirtualNode:
         raw_packet = packet.SerializeToString()
         register_pending_ack(packet, raw_packet)
         conn.sendto(raw_packet, (conn.host, conn.port))
+        self._persist_outbound_packet(packet, data)
         return packet.id
 
     def _handle_raw_packet(self, packet: mesh_pb2.MeshPacket, addr: Any) -> None:
@@ -383,13 +384,10 @@ class VirtualNode:
             packet.rx_time = int(time.time())
         if not packet.HasField("decoded"):
             self._try_decode_pki(packet)
+        if getattr(packet, "from", None) == self.node_num:
+            return
 
-        normalized = meshdb.normalize_packet(packet, "udp")
-        meshdb.handle_packet(
-            normalized,
-            node_database_number=self.node_num,
-            db_path=self.meshdb_path,
-        )
+        self._persist_packet(packet)
 
     def _handle_listener_error(self, error: Exception) -> None:
         raise RuntimeError("UDP listener failed") from error
@@ -429,6 +427,22 @@ class VirtualNode:
             return
         ack_packet = send_ack(packet)
         publish_ack(ack_packet)
+
+    def _persist_outbound_packet(self, packet: mesh_pb2.MeshPacket, data: mesh_pb2.Data) -> None:
+        stored_packet = mesh_pb2.MeshPacket()
+        stored_packet.CopyFrom(packet)
+        stored_packet.rx_time = int(time.time())
+        stored_packet.transport_mechanism = mesh_pb2.MeshPacket.TransportMechanism.TRANSPORT_MULTICAST_UDP
+        stored_packet.decoded.CopyFrom(data)
+        self._persist_packet(stored_packet)
+
+    def _persist_packet(self, packet: mesh_pb2.MeshPacket) -> None:
+        normalized = meshdb.normalize_packet(packet, "udp")
+        meshdb.handle_packet(
+            normalized,
+            node_database_number=self.node_num,
+            db_path=self.meshdb_path,
+        )
 
     def _broadcast_loop(self) -> None:
         nodeinfo_interval = int(self.config.broadcasts.nodeinfo_interval_seconds)
