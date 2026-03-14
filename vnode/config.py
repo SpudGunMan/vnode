@@ -13,6 +13,15 @@ class BroadcastConfig:
 
 
 @dataclass
+class PositionConfig:
+    enabled: bool = False
+    latitude: float | None = None
+    longitude: float | None = None
+    altitude: int | None = None
+    position_interval_seconds: int = 900
+
+
+@dataclass
 class ChannelConfig:
     name: str = "LongFast"
     psk: str = "AQ=="
@@ -45,6 +54,7 @@ class NodeConfig:
     is_licensed: bool = False
     hop_limit: int = 3
     broadcasts: BroadcastConfig = field(default_factory=BroadcastConfig)
+    position: PositionConfig = field(default_factory=PositionConfig)
     channel: ChannelConfig = field(default_factory=ChannelConfig)
     udp: UdpConfig = field(default_factory=UdpConfig)
     meshdb: MeshDbConfig = field(default_factory=MeshDbConfig)
@@ -66,6 +76,7 @@ class NodeConfig:
             is_licensed=bool(payload.get("is_licensed", cls.is_licensed)),
             hop_limit=int(payload.get("hop_limit", cls.hop_limit)),
             broadcasts=BroadcastConfig(**payload.get("broadcasts", {})),
+            position=PositionConfig(**payload.get("position", {})),
             channel=ChannelConfig(**payload.get("channel", {})),
             udp=UdpConfig(**payload.get("udp", {})),
             meshdb=MeshDbConfig(**payload.get("meshdb", {})),

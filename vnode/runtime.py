@@ -194,6 +194,36 @@ class VirtualNode:
         data.dest = int(destination)
         return self._send_data(data, destination=int(destination), force_pki=False)
 
+    def send_position(
+        self,
+        destination: int = BROADCAST_NUM,
+        *,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        altitude: int | None = None,
+    ) -> int:
+        if not self.config.position.enabled:
+            raise ValueError("Position sending is disabled in node.json")
+        resolved_latitude = self.config.position.latitude if latitude is None else latitude
+        resolved_longitude = self.config.position.longitude if longitude is None else longitude
+        resolved_altitude = self.config.position.altitude if altitude is None else altitude
+        if resolved_latitude is None or resolved_longitude is None:
+            raise ValueError("Position latitude and longitude must be configured before sending position")
+
+        position = mesh_pb2.Position(
+            latitude_i=int(float(resolved_latitude) * 1e7),
+            longitude_i=int(float(resolved_longitude) * 1e7),
+            time=int(time.time()),
+        )
+        if resolved_altitude is not None:
+            position.altitude = int(resolved_altitude)
+        data = mesh_pb2.Data()
+        data.portnum = portnums_pb2.PortNum.POSITION_APP
+        data.payload = position.SerializeToString()
+        data.source = self.node_num
+        data.dest = int(destination)
+        return self._send_data(data, destination=int(destination), force_pki=False)
+
     def send_text(
         self,
         destination: str | int,
@@ -401,11 +431,33 @@ class VirtualNode:
         publish_ack(ack_packet)
 
     def _broadcast_loop(self) -> None:
-        interval = int(self.config.broadcasts.nodeinfo_interval_seconds)
-        if interval <= 0:
+        nodeinfo_interval = int(self.config.broadcasts.nodeinfo_interval_seconds)
+        position_interval = int(self.config.position.position_interval_seconds)
+        have_position = (
+            self.config.position.enabled
+            and self.config.position.latitude is not None
+            and self.config.position.longitude is not None
+        )
+        if nodeinfo_interval <= 0 and (position_interval <= 0 or not have_position):
             return
-        while not self._stop.wait(interval):
-            self.send_nodeinfo()
+        next_nodeinfo = time.monotonic() + max(nodeinfo_interval, 0) if nodeinfo_interval > 0 else None
+        next_position = time.monotonic() + max(position_interval, 0) if position_interval > 0 and have_position else None
+
+        while not self._stop.is_set():
+            due_times = [due for due in (next_nodeinfo, next_position) if due is not None]
+            if not due_times:
+                return
+            wait_seconds = max(min(due_times) - time.monotonic(), 0.0)
+            if self._stop.wait(wait_seconds):
+                return
+
+            now = time.monotonic()
+            if next_nodeinfo is not None and now >= next_nodeinfo:
+                self.send_nodeinfo()
+                next_nodeinfo = now + nodeinfo_interval
+            if next_position is not None and now >= next_position:
+                self.send_position()
+                next_position = now + position_interval
 
     def _resolve_destination(self, destination: str | int) -> int:
         if isinstance(destination, int):

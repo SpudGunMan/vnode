@@ -49,6 +49,13 @@ class PkiCryptoTest(unittest.TestCase):
                         "send_startup_nodeinfo": False,
                         "nodeinfo_interval_seconds": 900,
                     },
+                    "position": {
+                        "enabled": False,
+                        "latitude": None,
+                        "longitude": None,
+                        "altitude": None,
+                        "position_interval_seconds": 900,
+                    },
                     "channel": {
                         "name": "LongFast",
                         "psk": "AQ==",
@@ -157,6 +164,13 @@ class PkiCryptoTest(unittest.TestCase):
                             "send_startup_nodeinfo": False,
                             "nodeinfo_interval_seconds": 120,
                         },
+                        "position": {
+                            "enabled": True,
+                            "latitude": 45.523064,
+                            "longitude": -122.676483,
+                            "altitude": 27,
+                            "position_interval_seconds": 300,
+                        },
                         "channel": {
                             "name": "TemplateChannel",
                             "psk": "AQ==",
@@ -184,7 +198,74 @@ class PkiCryptoTest(unittest.TestCase):
             self.assertEqual(node.config.long_name, "Template Node")
             self.assertEqual(node.config.channel.name, "TemplateChannel")
             self.assertEqual(node.config.hop_limit, 5)
+            self.assertTrue(node.config.position.enabled)
+            self.assertEqual(node.config.position.latitude, 45.523064)
+            self.assertEqual(node.config.position.longitude, -122.676483)
+            self.assertEqual(node.config.position.altitude, 27)
             self.assertTrue(written["security"]["private_key"])
+
+    def test_send_position_uses_configured_lat_lon(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _public_key, private_key = generate_keypair()
+            config_path = self._write_temp_config(root, b64_encode(private_key))
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            payload["position"] = {
+                "enabled": True,
+                "latitude": 45.523064,
+                "longitude": -122.676483,
+                "altitude": 27,
+                "position_interval_seconds": 900,
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            node = VirtualNode(config_path)
+
+            sent: list[bytes] = []
+            original_sendto = conn.sendto
+            original_host = conn.host
+            original_port = conn.port
+            try:
+                node.connect_send_socket = lambda: None
+                conn.host = "224.0.0.69"
+                conn.port = 4403
+                conn.sendto = lambda data, addr: sent.append(data)
+                packet_id = node.send_position()
+            finally:
+                conn.sendto = original_sendto
+                conn.host = original_host
+                conn.port = original_port
+
+            self.assertEqual(len(sent), 1)
+            packet = mesh_pb2.MeshPacket()
+            packet.ParseFromString(sent[0])
+            self.assertEqual(packet.id, packet_id)
+            decoded = decrypt_channel_packet(packet, node.config.channel.psk)
+            self.assertIsNotNone(decoded)
+            self.assertEqual(decoded.portnum, portnums_pb2.PortNum.POSITION_APP)
+            position = mesh_pb2.Position()
+            position.ParseFromString(decoded.payload)
+            self.assertEqual(position.latitude_i, int(45.523064 * 1e7))
+            self.assertEqual(position.longitude_i, int(-122.676483 * 1e7))
+            self.assertEqual(position.altitude, 27)
+
+    def test_send_position_requires_enabled_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _public_key, private_key = generate_keypair()
+            config_path = self._write_temp_config(root, b64_encode(private_key))
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            payload["position"] = {
+                "enabled": False,
+                "latitude": 45.523064,
+                "longitude": -122.676483,
+                "altitude": 27,
+                "position_interval_seconds": 900,
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            node = VirtualNode(config_path)
+
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                node.send_position()
 
     def test_direct_text_messages_request_ack_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

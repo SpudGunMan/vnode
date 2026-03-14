@@ -2,13 +2,20 @@
   "node_id": "!89abcdef",
   "long_name": "Virtual Meshtastic Node",
   "short_name": "VND",
-  "hw_model": "ANDROID_SIM",
+  "hw_model": "HELTEC_V3",
   "role": "CLIENT",
   "is_licensed": false,
   "hop_limit": 3,
   "broadcasts": {
     "send_startup_nodeinfo": true,
     "nodeinfo_interval_seconds": 900
+  },
+  "position": {
+    "enabled": false,
+    "latitude": null,
+    "longitude": null,
+    "altitude": null,
+    "position_interval_seconds": 900
   },
   "channel": {
     "name": "LongFast",
