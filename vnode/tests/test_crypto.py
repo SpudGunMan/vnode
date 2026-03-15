@@ -163,8 +163,8 @@ class PkiCryptoTest(unittest.TestCase):
                 json.dumps(
                     {
                         "node_id": "",
-                        "long_name": "Template Node",
-                        "short_name": "TPL",
+                        "long_name": "",
+                        "short_name": "",
                         "hw_model": "ANDROID_SIM",
                         "role": "CLIENT",
                         "is_licensed": False,
@@ -204,7 +204,9 @@ class PkiCryptoTest(unittest.TestCase):
 
             self.assertTrue(config_path.exists())
             self.assertRegex(node.config.node_id, r"^![0-9a-f]{8}$")
-            self.assertEqual(node.config.long_name, "Template Node")
+            expected_suffix = node.config.node_id[-4:]
+            self.assertEqual(node.config.long_name, f"Meshtastic {expected_suffix}")
+            self.assertEqual(node.config.short_name, expected_suffix)
             self.assertEqual(node.config.channel.name, "TemplateChannel")
             self.assertEqual(node.config.hop_limit, 5)
             self.assertTrue(node.config.position.enabled)
@@ -212,6 +214,8 @@ class PkiCryptoTest(unittest.TestCase):
             self.assertEqual(node.config.position.longitude, -122.676483)
             self.assertEqual(node.config.position.altitude, 27)
             self.assertEqual(written["node_id"], node.config.node_id)
+            self.assertEqual(written["long_name"], f"Meshtastic {expected_suffix}")
+            self.assertEqual(written["short_name"], expected_suffix)
             self.assertTrue(written["security"]["private_key"])
 
     def test_send_position_uses_configured_lat_lon(self) -> None:
