@@ -138,11 +138,26 @@ class NodeConfig:
             if value not in (0, 0xFFFFFFFF):
                 return f"!{value:08x}"
 
+    @staticmethod
+    def _generated_names(node_id: str) -> Dict[str, str]:
+        suffix = str(node_id).strip().lower()[-4:]
+        return {
+            "long_name": f"Meshtastic {suffix}",
+            "short_name": suffix,
+        }
+
     @classmethod
     def _populate_generated_defaults(cls, payload: Dict[str, Any]) -> bool:
         changed = False
         if not str(payload.get("node_id", "")).strip():
             payload["node_id"] = cls._generate_node_id()
+            changed = True
+        generated_names = cls._generated_names(str(payload["node_id"]))
+        if not str(payload.get("long_name", "")).strip():
+            payload["long_name"] = generated_names["long_name"]
+            changed = True
+        if not str(payload.get("short_name", "")).strip():
+            payload["short_name"] = generated_names["short_name"]
             changed = True
         return changed
 

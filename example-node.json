@@ -1,7 +1,7 @@
 {
   "node_id": "",
-  "long_name": "Virtual Meshtastic Node",
-  "short_name": "VND",
+  "long_name": "",
+  "short_name": "",
   "hw_model": "HELTEC_V3",
   "role": "CLIENT",
   "is_licensed": false,

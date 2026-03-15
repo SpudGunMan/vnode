@@ -15,6 +15,8 @@ If `node.json` does not exist yet, the runtime will create it automatically from
 
 If the template leaves `node_id` blank, the runtime will generate and persist a random
 Meshtastic-style node ID when it creates or first loads `node.json`.
+If `long_name` or `short_name` are blank, the runtime will also generate them from the
+last 4 hex characters of the node ID, for example `Meshtastic 691c` and `691c`.
 
 The runtime will generate and persist a PKI private key into `node.json` on first run if
 the private key is blank.
