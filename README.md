@@ -58,12 +58,14 @@ node = VirtualNode("node.json")
 packet_id = node.send_text("!1234abcd", "hello")
 ```
 
-The runtime also mirrors the common Meshtastic Python pubsub and method surface:
+The runtime also mirrors the common Meshtastic Python pubsub and method surface as a
+compatibility layer on top of the normal vnode send/receive path:
 
 - topics: `meshtastic.connection.established`, `meshtastic.connection.lost`, `meshtastic.receive`, `meshtastic.receive.text`, `meshtastic.receive.position`, `meshtastic.receive.user`, `meshtastic.receive.data.<PORTNUM>`, `meshtastic.node.updated`, `meshtastic.log.line`
 - methods: `receive()`, `unreceive()`, `close()`, `sendText()`, `sendData()`, `sendPosition()`, `getMyNodeInfo()`, `getMyUser()`, `getLongName()`
 
-That means code shaped like the Meshtastic Python library can often run on `VirtualNode` with minimal changes.
+That means code shaped like the Meshtastic Python library can often run on `VirtualNode`
+with minimal changes, without changing the core vnode packet handling path.
 
 ## Examples
 

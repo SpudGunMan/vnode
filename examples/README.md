@@ -44,6 +44,8 @@ This example does not use CLI arguments; edit the constants at the top of the fi
 
 Shows the mirrored Meshtastic Python API surface on `VirtualNode`:
 subscribe to `meshtastic.*` pubsub topics, inspect `getMyNodeInfo()`, and call `sendText()`.
+This is an optional compatibility layer; normal vnode packet handling still runs through the
+core runtime underneath it.
 This example does not use CLI arguments; edit the constants at the top of the file instead.
 
 ```bash
