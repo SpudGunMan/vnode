@@ -1237,7 +1237,7 @@ class PkiCryptoTest(unittest.TestCase):
 
             try:
                 node.receive(on_receive)
-                node._receive_wrappers[on_receive](packet, addr=("127.0.0.1", 4403))
+                node._publish_meshtastic_receive(packet)
             finally:
                 node.unreceive(on_receive)
 

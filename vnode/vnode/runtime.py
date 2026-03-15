@@ -84,7 +84,6 @@ class VirtualNode:
         self._last_nodeinfo_sent_monotonic = 0.0
         self._last_position_reply_monotonic = 0.0
         self._last_nodeinfo_seen: Dict[int, int] = {}
-        self._receive_wrappers: Dict[Callable[..., Any], Callable[..., None]] = {}
         self._response_handlers: Dict[int, tuple[Callable[[Dict[str, Any]], Any], bool]] = {}
         self.nodesByNum: Dict[int, Dict[str, Any]] = {}
         self.nodes: Dict[str, Dict[str, Any]] = {}
@@ -151,8 +150,6 @@ class VirtualNode:
             return
         pub.subscribe(self._handle_raw_packet, "mesh.rx.packet")
         pub.subscribe(self._handle_unique_packet, self.PACKET_TOPIC)
-        pub.subscribe(self._handle_receive_bridge, self.RECEIVE_TOPIC)
-        pub.subscribe(self._handle_node_update_bridge, self.PACKET_TOPIC)
         self.stream = UDPPacketStream(
             self.config.udp.mcast_group,
             int(self.config.udp.mcast_port),
@@ -188,14 +185,6 @@ class VirtualNode:
             pub.unsubscribe(self._handle_unique_packet, self.PACKET_TOPIC)
         except KeyError:
             pass
-        try:
-            pub.unsubscribe(self._handle_receive_bridge, self.RECEIVE_TOPIC)
-        except KeyError:
-            pass
-        try:
-            pub.unsubscribe(self._handle_node_update_bridge, self.PACKET_TOPIC)
-        except KeyError:
-            pass
         if self._broadcast_thread and self._broadcast_thread.is_alive():
             self._broadcast_thread.join(timeout=2.0)
         if was_connected:
@@ -211,23 +200,11 @@ class VirtualNode:
             self.stop()
 
     def receive(self, callback: Callable[..., Any]) -> None:
-        if callback in self._receive_wrappers:
-            return
-
-        def wrapper(packet: mesh_pb2.MeshPacket, addr: Any = None, **kwargs: Any) -> None:
-            del addr
-            del kwargs
-            callback(self._packet_to_receive_dict(packet), self)
-
-        self._receive_wrappers[callback] = wrapper
-        pub.subscribe(wrapper, self.RECEIVE_TOPIC)
+        pub.subscribe(callback, "meshtastic.receive")
 
     def unreceive(self, callback: Callable[..., Any]) -> None:
-        wrapper = self._receive_wrappers.pop(callback, None)
-        if wrapper is None:
-            return
         try:
-            pub.unsubscribe(wrapper, self.RECEIVE_TOPIC)
+            pub.unsubscribe(callback, "meshtastic.receive")
         except KeyError:
             pass
 
@@ -614,19 +591,18 @@ class VirtualNode:
         self._persist_outbound_packet(packet, data)
         return packet
 
-    def _handle_raw_packet(self, packet: mesh_pb2.MeshPacket, addr: Any = None, **kwargs: Any) -> None:
-        del addr
+    def _handle_raw_packet(self, packet: mesh_pb2.MeshPacket, **kwargs: Any) -> None:
         del kwargs
         if not getattr(packet, "rx_time", 0):
             packet.rx_time = int(time.time())
 
         if not packet.HasField("decoded"):
             self._try_decode_pki(packet)
+        self._publish_meshtastic_receive(packet)
         self._maybe_send_ack(packet)
         self._maybe_send_response(packet)
 
-    def _handle_unique_packet(self, packet: mesh_pb2.MeshPacket, addr: Any = None, **kwargs: Any) -> None:
-        del addr
+    def _handle_unique_packet(self, packet: mesh_pb2.MeshPacket, **kwargs: Any) -> None:
         del kwargs
         if not getattr(packet, "rx_time", 0):
             packet.rx_time = int(time.time())
@@ -636,22 +612,7 @@ class VirtualNode:
             return
 
         self._persist_packet(packet)
-
-    def _handle_receive_bridge(self, packet: mesh_pb2.MeshPacket, addr: Any = None, **kwargs: Any) -> None:
-        del addr
-        del kwargs
-        try:
-            self._publish_meshtastic_receive(packet)
-        except Exception as exc:
-            self._publish_log_line(f"meshtastic.receive bridge error: {exc}")
-
-    def _handle_node_update_bridge(self, packet: mesh_pb2.MeshPacket, addr: Any = None, **kwargs: Any) -> None:
-        del addr
-        del kwargs
-        try:
-            self._update_node_cache_from_packet(packet)
-        except Exception as exc:
-            self._publish_log_line(f"meshtastic.node.updated bridge error: {exc}")
+        self._update_node_cache_from_packet(packet)
 
     def _packet_to_receive_dict(self, packet: mesh_pb2.MeshPacket) -> Dict[str, Any]:
         as_dict = MessageToDict(packet)
