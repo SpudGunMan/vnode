@@ -6,8 +6,17 @@ from typing import List, Optional
 from .runtime import VirtualNode
 
 
+class VNodeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        if "the following arguments are required: command" in message:
+            message = (
+                "a command is required; choose one of: run, send-text, send-nodeinfo"
+            )
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Virtual Meshtastic node")
+    parser = VNodeArgumentParser(prog="vnode", description="Virtual Meshtastic node")
     parser.add_argument(
         "--vnode-file",
         "--config",
