@@ -6,6 +6,20 @@ Virtual Meshtastic node runtime built around:
 - `meshdb` for packet and node persistence
 - Meshtastic-style PKI DM encryption using X25519 + SHA-256 + AES-CCM
 
+## Install
+
+Install from PyPI:
+
+```bash
+pip install vnode
+```
+
+If you are working from this repository instead:
+
+```bash
+.venv/bin/pip install -e .
+```
+
 ## Config
 
 Edit [node.json](node.json).
@@ -34,7 +48,6 @@ broadcasts.
 ## Run
 
 ```bash
-.venv/bin/pip install -e .
 .venv/bin/python -m vnode --vnode-file node.json run
 ```
 
