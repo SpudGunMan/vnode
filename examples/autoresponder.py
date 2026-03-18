@@ -92,9 +92,11 @@ class DirectMessageAutoResponder:
 
         # Ignore everything except decoded text packets.
         if not self.node.is_text_message(raw_packet):
+            print(f"[SKIP] Packet {raw_packet.id} is not a text message")
             return
         # This example only answers direct messages addressed to this node.
         if not self.node.is_direct_message_for_me(raw_packet):
+            print(f"[SKIP] Packet {raw_packet.id} is not a direct message for this node")
             return
 
         sender_id = getattr(raw_packet, "from", None)
